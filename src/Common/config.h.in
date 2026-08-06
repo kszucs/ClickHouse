@@ -10,6 +10,7 @@
 #cmakedefine01 USE_OPENSSL_FIPS
 #cmakedefine01 USE_SSH
 #cmakedefine01 USE_HDFS
+#cmakedefine01 USE_OPENDAL
 #cmakedefine01 USE_AWS_S3
 #cmakedefine01 USE_GOOGLE_CLOUD
 #cmakedefine01 USE_GOOGLE_CLOUD_KMS

@@ -73,6 +73,8 @@ String DataSourceDescription::name() const
                     return "local_blob_storage";
                 case ObjectStorageType::Web:
                     return "web";
+                case ObjectStorageType::OpenDAL:
+                    return "opendal";
                 case ObjectStorageType::None:
                     return "none";
                 case ObjectStorageType::Max:
