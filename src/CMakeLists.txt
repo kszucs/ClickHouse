@@ -794,7 +794,7 @@ if (TARGET ch_contrib::arrow_ipc_metadata)
 endif ()
 
 if (TARGET ch_contrib::opendal)
-    dbms_target_link_libraries(PUBLIC ch_contrib::opendal)
+    target_link_libraries(dbms PUBLIC ch_contrib::opendal)
 endif()
 
 if (TARGET ch_contrib::avrocpp)

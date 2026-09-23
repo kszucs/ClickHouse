@@ -1,5 +1,7 @@
 #include <Storages/ObjectStorage/OpenDAL/Configuration.h>
 
+#if USE_OPENDAL
+
 #include <Core/Settings.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/evaluateConstantExpression.h>
@@ -13,6 +15,15 @@
 
 namespace DB
 {
+
+namespace Setting
+{
+    extern const SettingsBool opendal_create_new_file_on_insert;
+    extern const SettingsBool opendal_skip_empty_files;
+    extern const SettingsBool opendal_truncate_on_insert;
+    extern const SettingsSchemaInferenceMode schema_inference_mode;
+    extern const SettingsBool schema_inference_use_cache_for_opendal;
+}
 
 namespace ErrorCodes
 {
@@ -118,7 +129,7 @@ namespace
     }
 }
 
-void StorageOpenDALConfiguration::fromNamedCollection(const NamedCollection & collection, ContextPtr)
+void OpenDALStorageParsedArguments::fromNamedCollection(const NamedCollection & collection, ContextPtr)
 {
     scheme = collection.get<String>("scheme");
     config = parseConfigString(collection.getOrDefault<String>("config", ""));
@@ -127,15 +138,15 @@ void StorageOpenDALConfiguration::fromNamedCollection(const NamedCollection & co
     compression_method = collection.getOrDefault<String>("compression_method", collection.getOrDefault<String>("compression", "auto"));
     structure = collection.getOrDefault<String>("structure", "auto");
     object_namespace = config.contains("repo_id") ? config.at("repo_id") : "";
-    paths = {path};
+    raw_uri = scheme + "://" + path;
 }
 
-void StorageOpenDALConfiguration::fromAST(ASTs & args, ContextPtr context, bool /* with_structure */)
+void OpenDALStorageParsedArguments::fromAST(ASTs & args, ContextPtr context, bool /* with_structure */)
 {
-    if (args.empty() || args.size() > 5)
+    if (args.empty() || args.size() > max_number_of_arguments)
         throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
-            "OpenDAL table function requires either (uri[, format[, structure]]) "
-            "or (scheme, config, path, format[, structure]) arguments");
+            "Table function opendal requires 1 to {} arguments. All supported signatures:\n{}",
+            max_number_of_arguments, signatures);
 
     for (auto & arg : args)
         arg = evaluateConstantExpressionOrIdentifierAsLiteral(arg, context);
@@ -144,7 +155,8 @@ void StorageOpenDALConfiguration::fromAST(ASTs & args, ContextPtr context, bool 
     {
         /// Convenient shorthand: a single URI encodes scheme, config and path together,
         /// e.g. opendal('hf://datasets/org/name/path/to/file.parquet').
-        auto parsed = parseUri(checkAndGetLiteralArgument<String>(args[0], "uri"));
+        raw_uri = checkAndGetLiteralArgument<String>(args[0], "uri");
+        auto parsed = parseUri(raw_uri);
         scheme = parsed.scheme;
         config = parsed.config;
         path = parsed.path;
@@ -166,28 +178,54 @@ void StorageOpenDALConfiguration::fromAST(ASTs & args, ContextPtr context, bool 
             structure = checkAndGetLiteralArgument<String>(args[4], "structure");
 
         object_namespace = config.contains("repo_id") ? config.at("repo_id") : "";
+        raw_uri = scheme + "://" + path;
     }
+}
 
+void StorageOpenDALConfiguration::initializeFromParsedArguments(OpenDALStorageParsedArguments && parsed_arguments)
+{
+    StorageObjectStorageConfiguration::initializeFromParsedArguments(parsed_arguments);
+    scheme = std::move(parsed_arguments.scheme);
+    config = std::move(parsed_arguments.config);
+    object_namespace = std::move(parsed_arguments.object_namespace);
+    raw_uri = std::move(parsed_arguments.raw_uri);
+    path = std::move(parsed_arguments.path);
     paths = {path};
 }
 
-ObjectStoragePtr StorageOpenDALConfiguration::createObjectStorage(ContextPtr, bool)
+void StorageOpenDALConfiguration::fromNamedCollection(const NamedCollection & collection, ContextPtr context)
 {
-    return std::make_shared<OpenDALObjectStorage>(scheme, config, scheme + "://" + object_namespace, object_namespace);
+    OpenDALStorageParsedArguments parsed_arguments;
+    parsed_arguments.fromNamedCollection(collection, context);
+    initializeFromParsedArguments(std::move(parsed_arguments));
 }
 
-StorageObjectStorage::QuerySettings StorageOpenDALConfiguration::getQuerySettings(const ContextPtr & context) const
+void StorageOpenDALConfiguration::fromAST(ASTs & args, ContextPtr context, bool with_structure)
+{
+    OpenDALStorageParsedArguments parsed_arguments;
+    parsed_arguments.fromAST(args, context, with_structure);
+    initializeFromParsedArguments(std::move(parsed_arguments));
+}
+
+ObjectStoragePtr StorageOpenDALConfiguration::createObjectStorage(ContextPtr, bool, CredentialsConfigurationCallback)
+{
+    return std::make_shared<OpenDALObjectStorage>(scheme, config, getDataSourceDescription(), object_namespace);
+}
+
+StorageObjectStorageQuerySettings StorageOpenDALConfiguration::getQuerySettings(const ContextPtr & context) const
 {
     const auto & settings = context->getSettingsRef();
-    return StorageObjectStorage::QuerySettings{
-        .truncate_on_insert = settings.opendal_truncate_on_insert,
-        .create_new_file_on_insert = settings.opendal_create_new_file_on_insert,
-        .schema_inference_use_cache = settings.schema_inference_use_cache_for_opendal,
-        .schema_inference_mode = settings.schema_inference_mode,
-        .skip_empty_files = settings.opendal_skip_empty_files,
+    return StorageObjectStorageQuerySettings{
+        .truncate_on_insert = settings[Setting::opendal_truncate_on_insert],
+        .create_new_file_on_insert = settings[Setting::opendal_create_new_file_on_insert],
+        .schema_inference_use_cache = settings[Setting::schema_inference_use_cache_for_opendal],
+        .schema_inference_mode = settings[Setting::schema_inference_mode],
+        .skip_empty_files = settings[Setting::opendal_skip_empty_files],
         .list_object_keys_size = 0,
         .throw_on_zero_files_match = false,
         .ignore_non_existent_file = false};
 }
 
 }
+
+#endif

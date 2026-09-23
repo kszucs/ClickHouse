@@ -839,6 +839,29 @@ Possible values:
 - 0 — `SELECT` throws an exception if empty file is not compatible with requested format.
 - 1 — `SELECT` returns empty result for empty file.
 )", 0) \
+    DECLARE(Bool, opendal_truncate_on_insert, false, R"(
+Enables or disables truncation before an insert with the `opendal` table function. If disabled, an exception will be thrown on an attempt to insert if the file already exists.
+
+Possible values:
+- 0 — `INSERT` query appends new data to the end of the file.
+- 1 — `INSERT` query replaces existing content of the file with the new data.
+)", 0) \
+    DECLARE(Bool, opendal_create_new_file_on_insert, false, R"(
+Enables or disables creating a new file on each insert with the `opendal` table function. If enabled, on each insert a new file will be created with the name, similar to this pattern:
+
+initial: `data.Parquet.gz` -> `data.1.Parquet.gz` -> `data.2.Parquet.gz`, etc.
+
+Possible values:
+- 0 — `INSERT` query appends new data to the end of the file.
+- 1 — `INSERT` query creates a new file.
+)", 0) \
+    DECLARE(Bool, opendal_skip_empty_files, false, R"(
+Enables or disables skipping empty files with the `opendal` table function.
+
+Possible values:
+- 0 — `SELECT` throws an exception if empty file is not compatible with requested format.
+- 1 — `SELECT` returns empty result for empty file.
+)", 0) \
     DECLARE(Bool, enable_hdfs_pread, true, R"(
 Enable or disables pread for HDFS files. By default, `hdfsPread` is used. If disabled, `hdfsRead` and `hdfsSeek` will be used to read hdfs files.)", 0) \
     DECLARE(Bool, use_reader_executor, false, R"(
@@ -7645,6 +7668,9 @@ Use cache in schema inference while using azure table function
 )", 0) \
     DECLARE(Bool, schema_inference_use_cache_for_hdfs, true, R"(
 Use cache in schema inference while using hdfs table function
+)", 0) \
+    DECLARE(Bool, schema_inference_use_cache_for_opendal, true, R"(
+Use cache in schema inference while using opendal table function
 )", 0) \
     DECLARE(Bool, schema_inference_use_cache_for_url, true, R"(
 Use cache in schema inference while using url table function

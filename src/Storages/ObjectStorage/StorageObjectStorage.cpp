@@ -1114,6 +1114,12 @@ SchemaCache & StorageObjectStorage::getSchemaCache(const ContextPtr & context, c
             context->getConfigRef().getUInt("schema_inference_cache_max_elements_for_url", DEFAULT_SCHEMA_CACHE_ELEMENTS));
         return schema_cache;
     }
+    if (storage_engine_name == "opendal")
+    {
+        static SchemaCache schema_cache(
+            context->getConfigRef().getUInt("schema_inference_cache_max_elements_for_opendal", DEFAULT_SCHEMA_CACHE_ELEMENTS));
+        return schema_cache;
+    }
     throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Unsupported storage type: {}", storage_engine_name);
 }
 

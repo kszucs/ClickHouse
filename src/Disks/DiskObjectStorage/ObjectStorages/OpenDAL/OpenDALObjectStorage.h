@@ -70,7 +70,7 @@ public:
         const WriteSettings & write_settings = {}) override;
 
     void removeObjectIfExists(const StoredObject & object) override;
-    void removeObjectsIfExist(const StoredObjects & objects) override;
+    void removeObjectsIfExist(const StoredObjects & objects, StoredObjects * successful_objects = nullptr) override; /// NOLINT
 
     void copyObject( /// NOLINT
         const StoredObject & object_from,

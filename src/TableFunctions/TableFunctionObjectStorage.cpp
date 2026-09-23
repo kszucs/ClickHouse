@@ -21,6 +21,9 @@
 #include <Storages/ObjectStorage/Azure/Configuration.h>
 #include <Storages/ObjectStorage/HDFS/Configuration.h>
 #include <Storages/ObjectStorage/Local/Configuration.h>
+#if USE_OPENDAL
+#include <Storages/ObjectStorage/OpenDAL/Configuration.h>
+#endif
 #include <Storages/ObjectStorage/S3/Configuration.h>
 #include <Storages/ObjectStorage/StorageObjectStorage.h>
 #include <Storages/ObjectStorage/StorageObjectStorageCluster.h>
@@ -1397,6 +1400,48 @@ SELECT * FROM HDFS('hdfs://hdfs1:9000/data/path/date=*/country=*/code=*/*.parque
         {.allow_readonly = false}
     );
 #endif
+#if USE_OPENDAL
+    factory.registerFunction<TableFunctionOpenDAL>(
+        {.description = R"DOCS_MD(
+Reads data from any [Apache OpenDAL](https://opendal.apache.org/) service compiled into the server, for example the Hugging Face Hub through the `hf` scheme.
+
+## Syntax {#syntax}
+
+```sql
+opendal(uri [, format [, structure]])
+opendal(scheme, config, path, format [, structure])
+```
+
+## Arguments {#arguments}
+
+| Argument    | Description |
+|-------------|-------------|
+| `uri`       | A URI shorthand that encodes the scheme, config and path together. Only `hf://<repo_type>/<org>/<name>[@<revision>]/<path>` is supported. |
+| `scheme`    | The OpenDAL service name, for example `hf`, `fs` or `memory`. |
+| `config`    | The service options as a comma-separated `key=value` list, for example `repo_type=datasets,repo_id=org/name,revision=main`. |
+| `path`      | The path of the file inside the service. Globs are supported. |
+| `format`    | The [format](/reference/formats/index) of the file. |
+| `structure` | Structure of the table. Format `'column1_name column1_type, column2_name column2_type, ...'`. |
+
+## Returned value {#returned-value}
+
+A table with the specified structure for reading or writing data in the specified file.
+
+## Example {#example}
+
+```sql
+SELECT * FROM opendal('hf://datasets/org/name/path/to/file.parquet', 'Parquet')
+```
+
+## Storage Settings {#storage-settings}
+
+- `opendal_truncate_on_insert` - allows to truncate file before insert into it. Disabled by default.
+- `opendal_create_new_file_on_insert` - allows to create a new file on each insert if format has suffix. Disabled by default.
+- `opendal_skip_empty_files` - allows to skip empty files while reading. Disabled by default.
+)DOCS_MD", .category = FunctionDocumentation::Category::TableFunction},
+        {.allow_readonly = false}
+    );
+#endif
 }
 
 #if USE_AZURE_BLOB_STORAGE
@@ -1415,6 +1460,10 @@ template class TableFunctionObjectStorage<OSSDefinition, StorageS3Configuration>
 #if USE_HDFS
 template class TableFunctionObjectStorage<HDFSDefinition, StorageHDFSConfiguration>;
 template class TableFunctionObjectStorage<HDFSClusterDefinition, StorageHDFSConfiguration>;
+#endif
+
+#if USE_OPENDAL
+template class TableFunctionObjectStorage<OpenDALDefinition, StorageOpenDALConfiguration>;
 #endif
 
 #if USE_AVRO

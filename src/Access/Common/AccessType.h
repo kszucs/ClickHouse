@@ -45,6 +45,7 @@ enum class Source : uint8_t
     M(ARROW_FLIGHT, "ArrowFlight") \
     M(BIGQUERY, "BigQuery") \
     M(DISK, "Disk") \
+    M(OPENDAL, "OpenDAL") \
 
 #define DECLARE_ACCESS_TYPE_OBJECTS_ENUM_CONST(name, aliases) name,
 
@@ -447,6 +448,7 @@ enum class AccessType : uint8_t
     M(ARROW_FLIGHT, "", GLOBAL, ALL) \
     M(BIGQUERY, "", GLOBAL, ALL) \
     M(DISK, "", GLOBAL, ALL) \
+    M(OPENDAL, "", GLOBAL, ALL) \
     M(SOURCES, "", GLOBAL, ALL) \
     \
     /* Consts */ \

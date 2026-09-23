@@ -147,7 +147,7 @@ std::unique_ptr<ReadBufferFromFileBase> OpenDALObjectStorage::readObject( /// NO
     }
 
     const auto patched = patchSettings(read_settings);
-    size_t buf_size = patched.remote_fs_buffer_size ? patched.remote_fs_buffer_size : DBMS_DEFAULT_BUFFER_SIZE;
+    size_t buf_size = patched.remote_fs_settings.buffer_size ? patched.remote_fs_settings.buffer_size : DBMS_DEFAULT_BUFFER_SIZE;
 
     auto reader = callOpenDAL(
         "reader", object.remote_path, description, [&] { return operator_.GetReader(object.remote_path); });
@@ -178,10 +178,15 @@ void OpenDALObjectStorage::removeObjectIfExists(const StoredObject & object)
     callOpenDAL("remove", object.remote_path, description, [&] { operator_.Remove(object.remote_path); });
 }
 
-void OpenDALObjectStorage::removeObjectsIfExist(const StoredObjects & objects)
+void OpenDALObjectStorage::removeObjectsIfExist(const StoredObjects & objects, StoredObjects * successful_objects)
 {
     for (const auto & object : objects)
+    {
         removeObjectIfExists(object);
+
+        if (successful_objects)
+            successful_objects->emplace_back(object);
+    }
 }
 
 void OpenDALObjectStorage::copyObject( /// NOLINT

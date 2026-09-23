@@ -121,6 +121,20 @@ using TableFunctionAzureBlob = TableFunctionObjectStorage<AzureDefinition, Stora
 using TableFunctionHDFS = TableFunctionObjectStorage<HDFSDefinition, StorageHDFSConfiguration>;
 #endif
 
+#if USE_OPENDAL
+class StorageOpenDALConfiguration;
+
+class TableFunctionOpenDAL : public TableFunctionObjectStorage<OpenDALDefinition, StorageOpenDALConfiguration>
+{
+protected:
+    /// Overridden directly because `OpenDAL` is not registered as a storage engine.
+    std::optional<AccessTypeObjects::Source> getSourceAccessObject() const override
+    {
+        return AccessTypeObjects::Source::OPENDAL;
+    }
+};
+#endif
+
 
 #if USE_AVRO
 #    if USE_AWS_S3
