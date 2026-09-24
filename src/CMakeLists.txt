@@ -168,8 +168,6 @@ add_headers_and_sources(dbms Disks/IO)
 add_headers_and_sources(dbms Disks/DiskObjectStorage)
 add_headers_and_sources(dbms Disks/DiskObjectStorage/Replication)
 add_headers_and_sources(dbms Disks/DiskObjectStorage/ObjectStorages)
-# A generic IObjectStorage backend on top of Apache OpenDAL, configurable for any OpenDAL
-# service (hf with Xet dedup, s3, gcs, ...). Off by default; enable with -DENABLE_OPENDAL=ON.
 if (TARGET ch_contrib::opendal)
     add_headers_and_sources(dbms Disks/DiskObjectStorage/ObjectStorages/OpenDAL)
 endif()

@@ -64,16 +64,8 @@ else()
     endif()
 endif()
 
-option(ENABLE_RUST "Enable rust" ${DEFAULT_ENABLE_RUST})
-if(NOT ENABLE_RUST)
-    message(STATUS "Not using Rust")
-    return()
-endif()
-
-set_rust_target()
-# Define function corrosion_import_crate()
-include ("${ClickHouse_SOURCE_DIR}/contrib/corrosion/cmake/Corrosion.cmake")
-
+# C and C++ flags for code that cargo builds through the `cc` crate. They depend only on the C/C++
+# toolchain, so they are computed even without Rust for contribs that run cargo themselves (OpenDAL).
 set(CXX_INCLUDE_DIR "${ClickHouse_SOURCE_DIR}/contrib/llvm-project/libcxx/include")
 
 # For musl, libc++ headers must come before musl's, but the toolchain puts musl includes
@@ -150,6 +142,18 @@ if (CXX_PUBLIC_DEFS)
     list(JOIN CXX_PUBLIC_DEFS " " CXX_PUBLIC_DEFS)
     set(RUST_CXXFLAGS "${RUST_CXXFLAGS} ${CXX_PUBLIC_DEFS}")
 endif()
+set(RUST_CFLAGS ${RUST_CFLAGS} CACHE INTERNAL "Rust config")
+set(RUST_CXXFLAGS ${RUST_CXXFLAGS} CACHE INTERNAL "Rust config")
+
+option(ENABLE_RUST "Enable rust" ${DEFAULT_ENABLE_RUST})
+if(NOT ENABLE_RUST)
+    message(STATUS "Not using Rust")
+    return()
+endif()
+
+set_rust_target()
+# Define function corrosion_import_crate()
+include ("${ClickHouse_SOURCE_DIR}/contrib/corrosion/cmake/Corrosion.cmake")
 
 if(CCACHE_EXECUTABLE MATCHES "/chcache$" OR CCACHE_EXECUTABLE MATCHES "/sccache$")
     message(STATUS "Using RUSTC_WRAPPER: ${CCACHE_EXECUTABLE}")
@@ -283,8 +287,6 @@ endif()
 # We now prepare a custom config.toml with all the flags and add it to cargo via flags
 configure_file("config.toml.in" "config.toml" @ONLY)
 set(RUST_CONFIG_FILE "${CMAKE_CURRENT_BINARY_DIR}/config.toml" CACHE INTERNAL "Rust config")
-set(RUST_CFLAGS ${RUST_CFLAGS} CACHE INTERNAL "Rust config")
-set(RUST_CXXFLAGS ${RUST_CXXFLAGS} CACHE INTERNAL "Rust config")
 set(RUSTFLAGS "${RUSTFLAGS}" CACHE INTERNAL "Rust config")
 set(RUSTCWRAPPER ${RUSTCWRAPPER} CACHE INTERNAL "Rust config")
 set(RUST_CARGO_BUILD_STD ${RUST_CARGO_BUILD_STD} CACHE INTERNAL "Rust config")

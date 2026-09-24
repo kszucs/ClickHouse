@@ -9,10 +9,8 @@
 namespace DB
 {
 
-/// Streams data lazily from an opendal::Reader, translating seeks into opendal's own
-/// range-read machinery (which for e.g. the "hf" service means real HTTP Range requests,
-/// or ranged Xet chunk downloads) rather than buffering whole objects into memory.
-/// Modeled on ReadBufferFromFileDescriptor's nextImpl/seek pattern.
+/// Reads an object through positioned reads on an opendal::Reader (e.g. HTTP range requests for "hf"),
+/// so a seek only moves the offset of the next read.
 class OpenDALReadBuffer : public ReadBufferFromFileBase
 {
 public:

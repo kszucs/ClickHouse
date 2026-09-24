@@ -2428,6 +2428,7 @@ void ServerSettings::checkUnknownSettings(const Poco::Util::AbstractConfiguratio
         "schema_inference_cache_max_elements_for_azure",
         "schema_inference_cache_max_elements_for_hdfs",
         "schema_inference_cache_max_elements_for_local",
+        "schema_inference_cache_max_elements_for_opendal",
 
         /// Config processing
         "include_from",

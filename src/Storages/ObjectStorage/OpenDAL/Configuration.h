@@ -27,9 +27,8 @@ struct OpenDALStorageParsedArguments : private StorageParsedArguments
 
     String scheme;
     std::unordered_map<String, String> config;
-    String object_namespace;
     String path;
-    /// The URI as written by the user, or `scheme://path` for the explicit form.
+    /// The URI as written by the user; empty for the explicit form.
     String raw_uri;
 
     void fromNamedCollection(const NamedCollection & collection, ContextPtr context);

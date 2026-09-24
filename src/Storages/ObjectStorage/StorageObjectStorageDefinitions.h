@@ -49,7 +49,6 @@ struct HDFSDefinition
     static constexpr auto object_storage_type = "hdfs";
 };
 
-/// There is no `OpenDAL` table engine, so `TableFunctionOpenDAL` reports its source access type itself.
 struct OpenDALDefinition
 {
     static constexpr auto name = "opendal";

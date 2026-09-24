@@ -1,7 +1,5 @@
 #include <Disks/DiskObjectStorage/ObjectStorages/OpenDAL/OpenDALError.h>
 
-#if USE_OPENDAL
-
 #include <Common/Exception.h>
 
 namespace DB
@@ -40,10 +38,7 @@ namespace
                 return ErrorCodes::NOT_IMPLEMENTED;
             case opendal::ErrorKind::RangeNotSatisfied:
                 return ErrorCodes::ARGUMENT_OUT_OF_BOUND;
-            /// Everything else - Unexpected, RateLimited, ConditionNotMatch,
-            /// IsSameFile, and any kind a newer OpenDAL adds - has no closer
-            /// equivalent, so it lands on the backend's own code. This mirrors
-            /// how S3_ERROR and AZURE_BLOB_STORAGE_ERROR are used.
+            /// No closer equivalent, same as `S3_ERROR` and `AZURE_BLOB_STORAGE_ERROR`.
             case opendal::ErrorKind::Unexpected:
             case opendal::ErrorKind::RateLimited:
             case opendal::ErrorKind::ConditionNotMatch:
@@ -54,26 +49,9 @@ namespace
     }
 }
 
-void throwOpenDALError(
-    const opendal::Error & error,
-    std::string_view operation,
-    std::string_view path,
-    std::string_view description)
+void throwOpenDALError(const opendal::Error & error, std::string_view description)
 {
-    /// The kind name and the temporary flag are kept in the message on purpose:
-    /// several kinds collapse onto OPENDAL_ERROR, so without them a log line
-    /// could not distinguish a rate limit from an unexpected service failure.
-    throw Exception(
-        toErrorCode(error.Kind()),
-        "OpenDAL {} failed for {} in {}: {}{} ({})",
-        operation,
-        path.empty() ? "<no path>" : path,
-        description,
-        opendal::ToStringView(error.Kind()),
-        error.IsTemporary() ? " (temporary)" : "",
-        error.Message());
+    throw Exception(toErrorCode(error.Kind()), "OpenDAL request to {} failed: {}", description, error.what());
 }
 
 }
-
-#endif

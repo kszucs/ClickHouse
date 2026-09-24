@@ -1,7 +1,5 @@
 #include <Storages/ObjectStorage/OpenDAL/Configuration.h>
 
-#if USE_OPENDAL
-
 #include <Core/Settings.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/evaluateConstantExpression.h>
@@ -56,7 +54,6 @@ namespace
         String scheme;
         std::unordered_map<String, String> config;
         String path;
-        String object_namespace;
     };
 
     /// hf://<repo_type>/<org>/<name>[@<revision>]/<path/to/file>
@@ -92,8 +89,7 @@ namespace
         return ParsedUri{
             .scheme = "hf",
             .config = {{"repo_type", repo_type}, {"repo_id", repo_id}, {"revision", revision}},
-            .path = path,
-            .object_namespace = repo_id};
+            .path = path};
     }
 
     ParsedUri parseUri(const String & uri)
@@ -137,8 +133,6 @@ void OpenDALStorageParsedArguments::fromNamedCollection(const NamedCollection & 
     format = collection.getOrDefault<String>("format", "auto");
     compression_method = collection.getOrDefault<String>("compression_method", collection.getOrDefault<String>("compression", "auto"));
     structure = collection.getOrDefault<String>("structure", "auto");
-    object_namespace = config.contains("repo_id") ? config.at("repo_id") : "";
-    raw_uri = scheme + "://" + path;
 }
 
 void OpenDALStorageParsedArguments::fromAST(ASTs & args, ContextPtr context, bool /* with_structure */)
@@ -157,10 +151,9 @@ void OpenDALStorageParsedArguments::fromAST(ASTs & args, ContextPtr context, boo
         /// e.g. opendal('hf://datasets/org/name/path/to/file.parquet').
         raw_uri = checkAndGetLiteralArgument<String>(args[0], "uri");
         auto parsed = parseUri(raw_uri);
-        scheme = parsed.scheme;
-        config = parsed.config;
-        path = parsed.path;
-        object_namespace = parsed.object_namespace;
+        scheme = std::move(parsed.scheme);
+        config = std::move(parsed.config);
+        path = std::move(parsed.path);
 
         if (args.size() > 1)
             format = checkAndGetLiteralArgument<String>(args[1], "format");
@@ -176,9 +169,6 @@ void OpenDALStorageParsedArguments::fromAST(ASTs & args, ContextPtr context, boo
         format = checkAndGetLiteralArgument<String>(args[3], "format");
         if (args.size() > 4)
             structure = checkAndGetLiteralArgument<String>(args[4], "structure");
-
-        object_namespace = config.contains("repo_id") ? config.at("repo_id") : "";
-        raw_uri = scheme + "://" + path;
     }
 }
 
@@ -187,9 +177,9 @@ void StorageOpenDALConfiguration::initializeFromParsedArguments(OpenDALStoragePa
     StorageObjectStorageConfiguration::initializeFromParsedArguments(parsed_arguments);
     scheme = std::move(parsed_arguments.scheme);
     config = std::move(parsed_arguments.config);
-    object_namespace = std::move(parsed_arguments.object_namespace);
-    raw_uri = std::move(parsed_arguments.raw_uri);
+    object_namespace = config.contains("repo_id") ? config.at("repo_id") : "";
     path = std::move(parsed_arguments.path);
+    raw_uri = parsed_arguments.raw_uri.empty() ? scheme + "://" + path.path : std::move(parsed_arguments.raw_uri);
     paths = {path};
 }
 
@@ -227,5 +217,3 @@ StorageObjectStorageQuerySettings StorageOpenDALConfiguration::getQuerySettings(
 }
 
 }
-
-#endif

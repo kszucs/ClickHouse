@@ -10,7 +10,7 @@ OpenDALWriteBuffer::OpenDALWriteBuffer(
     : WriteBufferFromFileBase(buf_size, nullptr, 0)
     , path(std::move(path_))
     , description(std::move(description_))
-    , writer(callOpenDAL("writer", path, description, [&] { return operator_.GetWriter(path); }))
+    , writer(callOpenDAL(description, [&] { return operator_.GetWriter(path); }))
 {
 }
 
@@ -18,17 +18,13 @@ void OpenDALWriteBuffer::nextImpl()
 {
     if (!offset())
         return;
-    callOpenDAL(
-        "write",
-        path,
-        description,
-        [&] { writer.Write(std::string_view(working_buffer.begin(), offset())); });
+    callOpenDAL(description, [&] { writer.Write(std::string_view(working_buffer.begin(), offset())); });
 }
 
 void OpenDALWriteBuffer::finalizeImpl()
 {
     next();
-    callOpenDAL("close", path, description, [&] { writer.Close(); });
+    callOpenDAL(description, [&] { writer.Close(); });
 }
 
 }

@@ -11,7 +11,6 @@
 #include <IO/WriteBufferFromFileBase.h>
 #include <IO/ReadHelpers.h>
 #include <Common/Exception.h>
-#include <Common/tests/gtest_global_context.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -26,12 +25,18 @@ namespace DB::ErrorCodes
     extern const int NOT_IMPLEMENTED;
 }
 
-/// ReadBufferFromRemoteFSGather's Poco HTTP machinery falls back to
-/// Poco::Util::Application::instance() when the Context's own config lacks a ready proxy
-/// config, which throws NullPointerException if no Application singleton exists - as in a
-/// bare gtest binary. gtest_aws_s3_client.cpp already provides the process-wide instance
-/// (Poco::Util::Application enforces a single instance per process, so this file must not
-/// declare a second one).
+#define EXPECT_THROW_ERROR_CODE(statement, expected_code) \
+    EXPECT_THROW( \
+        try \
+        { \
+            statement; \
+        } \
+        catch (const Exception & e) \
+        { \
+            EXPECT_EQ(expected_code, e.code()); \
+            throw; \
+        }, \
+        Exception)
 
 namespace
 {
@@ -42,11 +47,7 @@ struct Backend
 {
     /// OpenDAL service name.
     std::string scheme;
-    /// "fs" stores under a real directory and needs a `root`; "memory" is
-    /// self-contained. Distinguishing them here keeps the fixture simple.
-    bool needs_root;
-    /// Only the backends whose capability advertises copy can perform one; the
-    /// rest must report NOT_IMPLEMENTED rather than silently doing nothing.
+    /// Backends without copy support must report NOT_IMPLEMENTED rather than silently do nothing.
     bool supports_copy;
 };
 
@@ -60,14 +61,11 @@ class OpenDALObjectStorageTest : public ::testing::TestWithParam<Backend>
 protected:
     void SetUp() override
     {
-        /// A global Context has to exist before any storage is constructed, even though
-        /// readObject() now returns a bare buffer: settings patching still reaches for it.
-        getContext();
-
         const auto & backend = GetParam();
         std::unordered_map<String, String> config;
 
-        if (backend.needs_root)
+        /// "fs" stores under a real directory; "memory" is self-contained.
+        if (backend.scheme == "fs")
         {
             /// Include the test name and pid so that concurrently running tests
             /// cannot collide on the same directory.
@@ -131,44 +129,19 @@ TEST_P(OpenDALObjectStorageTest, GetObjectMetadataReportsSize)
     EXPECT_EQ(storage->getObjectMetadata("sized.bin", /* with_tags */ false).size_bytes, 10u);
 }
 
-/// The mapping from OpenDAL's ErrorKind to a ClickHouse error code is the point
-/// of OpenDALError.cpp; asserting the specific code is what actually verifies it.
-/// A missing object is ErrorKind::NotFound, which must arrive as FILE_DOESNT_EXIST
-/// rather than the untyped failure the binding used to produce.
+/// A missing object is ErrorKind::NotFound, which must arrive as FILE_DOESNT_EXIST.
 TEST_P(OpenDALObjectStorageTest, StatOnMissingObjectThrowsFileDoesntExist)
 {
-    try
-    {
-        storage->getObjectMetadata("no/such/object.bin", /* with_tags */ false);
-        FAIL() << "expected getObjectMetadata() to throw for a missing object";
-    }
-    catch (const Exception & e)
-    {
-        EXPECT_EQ(e.code(), ErrorCodes::FILE_DOESNT_EXIST);
-    }
+    EXPECT_THROW_ERROR_CODE(storage->getObjectMetadata("no/such/object.bin", /* with_tags */ false), ErrorCodes::FILE_DOESNT_EXIST);
 }
 
 TEST_P(OpenDALObjectStorageTest, ReadOnMissingObjectThrowsFileDoesntExist)
 {
-    try
-    {
-        /// A zero bytes_size sends readObject() through its getObjectMetadata()
-        /// fallback, which is the path that has to report the missing object.
-        auto buffer = storage->readObject(StoredObject("no/such/object.bin"), ReadSettings{});
-        std::string content;
-        readStringUntilEOF(content, *buffer);
-        FAIL() << "expected reading a missing object to throw";
-    }
-    catch (const Exception & e)
-    {
-        EXPECT_EQ(e.code(), ErrorCodes::FILE_DOESNT_EXIST);
-    }
+    /// Without a known size, readObject() stats the object, which reports it missing.
+    EXPECT_THROW_ERROR_CODE(storage->readObject(StoredObject("no/such/object.bin"), ReadSettings{}), ErrorCodes::FILE_DOESNT_EXIST);
 }
 
-/// listObjects() walks directories itself. "fs" reports the listing root back as
-/// an entry ("/" when listing ""), which previously made the walk descend into it
-/// and traverse the whole tree twice, returning every file two times; "memory"
-/// omits the root entry, so only one of these backends ever exposed it.
+/// "fs" reports the listing root back as an entry ("/" when listing ""), which must not be listed again.
 TEST_P(OpenDALObjectStorageTest, ListObjectsFindsNestedFilesExactlyOnce)
 {
     write("top.txt", "aaa");
@@ -183,8 +156,7 @@ TEST_P(OpenDALObjectStorageTest, ListObjectsFindsNestedFilesExactlyOnce)
         found.push_back(child->relative_path);
     std::sort(found.begin(), found.end());
 
-    /// Compared as a sorted sequence rather than a set: a set would quietly
-    /// absorb the duplicates this test exists to catch.
+    /// A sorted sequence rather than a set, so that duplicates are caught.
     EXPECT_EQ(
         found,
         (std::vector<std::string>{"nested/deep/bottom.txt", "nested/middle.txt", "top.txt"}));
@@ -222,13 +194,9 @@ TEST_P(OpenDALObjectStorageTest, RemoveObjectIfExists)
     storage->removeObjectIfExists(StoredObject("doomed.txt"));
     EXPECT_FALSE(storage->exists(StoredObject("doomed.txt")));
 
-    /// Must tolerate an object that is already gone - the interface offers no
-    /// non-idempotent remove, so this is the only deletion path callers have.
     EXPECT_NO_THROW(storage->removeObjectIfExists(StoredObject("doomed.txt")));
 }
 
-/// tryGetObjectMetadata() must report absence as an empty optional while still
-/// returning real metadata for an object that is present.
 TEST_P(OpenDALObjectStorageTest, TryGetObjectMetadataToleratesMissingObject)
 {
     EXPECT_FALSE(storage->tryGetObjectMetadata("no/such/object.bin", /* with_tags */ false).has_value());
@@ -252,17 +220,7 @@ TEST_P(OpenDALObjectStorageTest, CopyObjectFollowsCapability)
     }
     else
     {
-        /// The backend does not advertise copy, so it must say so explicitly
-        /// instead of failing obscurely inside OpenDAL.
-        try
-        {
-            storage->copyObject(from, to, ReadSettings{}, WriteSettings{});
-            FAIL() << "expected copyObject() to throw on a backend without copy support";
-        }
-        catch (const Exception & e)
-        {
-            EXPECT_EQ(e.code(), ErrorCodes::NOT_IMPLEMENTED);
-        }
+        EXPECT_THROW_ERROR_CODE(storage->copyObject(from, to, ReadSettings{}, WriteSettings{}), ErrorCodes::NOT_IMPLEMENTED);
     }
 }
 
@@ -270,16 +228,24 @@ INSTANTIATE_TEST_SUITE_P(
     Backends,
     OpenDALObjectStorageTest,
     ::testing::Values(
-        Backend{.scheme = "memory", .needs_root = false, .supports_copy = false},
-        Backend{.scheme = "fs", .needs_root = true, .supports_copy = true}),
-    [](const ::testing::TestParamInfo<Backend> & info) { return info.param.scheme; });
+        Backend{.scheme = "memory", .supports_copy = false},
+        Backend{.scheme = "fs", .supports_copy = true}),
+    [](const ::testing::TestParamInfo<Backend> & param_info) { return param_info.param.scheme; });
 
 
 /// Live tests against huggingface.co. Opt-in: they need network, and the write
 /// test additionally needs credentials with write access to the target repo.
 namespace
 {
-    bool hfTestsEnabled() { return std::getenv("CLICKHOUSE_TEST_OPENDAL_HF") != nullptr; } // NOLINT(concurrency-mt-unsafe)
+    class OpenDALHuggingFace : public ::testing::Test
+    {
+    protected:
+        void SetUp() override
+        {
+            if (!std::getenv("CLICKHOUSE_TEST_OPENDAL_HF")) // NOLINT(concurrency-mt-unsafe)
+                GTEST_SKIP() << "set CLICKHOUSE_TEST_OPENDAL_HF=1 to run tests that reach huggingface.co";
+        }
+    };
 
     /// A small, long-lived HF Transformers test fixture repo - stable and tiny, used
     /// across the HF ecosystem's own CI for years, so a reasonable choice for a network test.
@@ -297,16 +263,12 @@ namespace
             {"revision", "main"},
         };
         return std::make_unique<OpenDALObjectStorage>(
-            "hf", std::move(config), "hf-opendal://models/hf-internal-testing/tiny-random-bert@main", "hf-internal-testing/tiny-random-bert");
+            "hf", config, "hf-opendal://models/hf-internal-testing/tiny-random-bert@main", "hf-internal-testing/tiny-random-bert");
     }
 }
 
-TEST(OpenDALHuggingFace, ListExistsMetadataRead)
+TEST_F(OpenDALHuggingFace, ListExistsMetadataRead)
 {
-    if (!hfTestsEnabled())
-        GTEST_SKIP() << "set CLICKHOUSE_TEST_OPENDAL_HF=1 to run tests that reach huggingface.co";
-
-    getContext();
     auto storage = makeHFStorage();
 
     RelativePathsWithMetadata children;
@@ -331,30 +293,16 @@ TEST(OpenDALHuggingFace, ListExistsMetadataRead)
     EXPECT_EQ(content.size(), expected_size);
 }
 
-TEST(OpenDALHuggingFace, GetObjectMetadataThrowsForMissingFile)
+TEST_F(OpenDALHuggingFace, GetObjectMetadataThrowsForMissingFile)
 {
-    if (!hfTestsEnabled())
-        GTEST_SKIP() << "set CLICKHOUSE_TEST_OPENDAL_HF=1 to run tests that reach huggingface.co";
-
     auto storage = makeHFStorage();
-    try
-    {
-        storage->getObjectMetadata("this/path/does/not/exist.bin", /* with_tags */ false);
-        FAIL() << "expected getObjectMetadata() to throw for a missing file";
-    }
-    catch (const Exception & e)
-    {
-        EXPECT_EQ(e.code(), ErrorCodes::FILE_DOESNT_EXIST);
-    }
+    EXPECT_THROW_ERROR_CODE(storage->getObjectMetadata("this/path/does/not/exist.bin", /* with_tags */ false), ErrorCodes::FILE_DOESNT_EXIST);
 }
 
 /// No token was configured in makeHFStorage(), so the backend must report itself (and
 /// behave) as read-only - this needs no credentials, unlike an actual write round-trip.
-TEST(OpenDALHuggingFace, ReadOnlyWithoutToken)
+TEST_F(OpenDALHuggingFace, ReadOnlyWithoutToken)
 {
-    if (!hfTestsEnabled())
-        GTEST_SKIP() << "set CLICKHOUSE_TEST_OPENDAL_HF=1 to run tests that reach huggingface.co";
-
     auto storage = makeHFStorage();
     EXPECT_TRUE(storage->isReadOnly());
     EXPECT_THROW(
@@ -364,11 +312,8 @@ TEST(OpenDALHuggingFace, ReadOnlyWithoutToken)
 /// Write, list, and remove round-trip against a real writable repo. Unlike the other
 /// tests here, this one relies on ambient HF credentials (HF_TOKEN env, or a cached
 /// `huggingface-cli login` token file) actually having write access to the target repo.
-TEST(OpenDALHuggingFace, WriteAndRemoveRoundTrip)
+TEST_F(OpenDALHuggingFace, WriteAndRemoveRoundTrip)
 {
-    if (!hfTestsEnabled())
-        GTEST_SKIP() << "set CLICKHOUSE_TEST_OPENDAL_HF=1 to run tests that reach huggingface.co";
-
     unsetenv("HF_HUB_DISABLE_IMPLICIT_TOKEN"); // NOLINT(concurrency-mt-unsafe)
 
     std::unordered_map<String, String> config{
@@ -377,7 +322,7 @@ TEST(OpenDALHuggingFace, WriteAndRemoveRoundTrip)
         {"revision", "main"},
     };
     auto storage = std::make_unique<OpenDALObjectStorage>(
-        "hf", std::move(config), "hf-opendal://datasets/kszucs/opendal@main", "kszucs/opendal");
+        "hf", config, "hf-opendal://datasets/kszucs/opendal@main", "kszucs/opendal");
 
     if (storage->isReadOnly())
         GTEST_SKIP() << "No write-capable HF credentials available in this environment";

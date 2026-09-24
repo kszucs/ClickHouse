@@ -9,6 +9,7 @@ namespace DB
 namespace ErrorCodes
 {
     extern const int CANNOT_SEEK_THROUGH_FILE;
+    extern const int SEEK_POSITION_OUT_OF_BOUND;
 }
 
 OpenDALReadBuffer::OpenDALReadBuffer(
@@ -22,19 +23,14 @@ OpenDALReadBuffer::OpenDALReadBuffer(
 
 bool OpenDALReadBuffer::nextImpl()
 {
-    size_t max_bytes = internal_buffer.size();
-    if (read_until_position)
-    {
-        if (file_offset_of_buffer_end >= *read_until_position)
-            return false;
-        max_bytes = std::min(max_bytes, *read_until_position - file_offset_of_buffer_end);
-    }
+    size_t end = read_until_position ? std::min(*read_until_position, *file_size) : *file_size;
+    if (file_offset_of_buffer_end >= end)
+        return false;
+    size_t max_bytes = std::min(internal_buffer.size(), end - file_offset_of_buffer_end);
 
     auto bytes_read = callOpenDAL(
-        "read",
-        file_name,
         description,
-        [&] { return reader.Read(internal_buffer.begin(), static_cast<std::streamsize>(max_bytes)); });
+        [&] { return reader.ReadAt(internal_buffer.begin(), static_cast<std::streamsize>(max_bytes), file_offset_of_buffer_end); });
     if (bytes_read <= 0)
         return false;
 
@@ -46,43 +42,22 @@ bool OpenDALReadBuffer::nextImpl()
 
 off_t OpenDALReadBuffer::seek(off_t offset, int whence)
 {
-    size_t new_pos;
-    if (whence == SEEK_SET)
+    if (whence != SEEK_SET)
+        throw Exception(ErrorCodes::CANNOT_SEEK_THROUGH_FILE, "Only SEEK_SET mode is allowed");
+    if (offset < 0)
+        throw Exception(ErrorCodes::SEEK_POSITION_OUT_OF_BOUND, "Seek position is out of bounds. Offset: {}", offset);
+
+    auto new_pos = static_cast<size_t>(offset);
+    if (!working_buffer.empty() && file_offset_of_buffer_end - working_buffer.size() <= new_pos && new_pos <= file_offset_of_buffer_end)
     {
-        if (offset < 0)
-            throw Exception(ErrorCodes::CANNOT_SEEK_THROUGH_FILE, "Seek position out of bounds: {}", offset);
-        new_pos = static_cast<size_t>(offset);
-    }
-    else if (whence == SEEK_CUR)
-    {
-        new_pos = file_offset_of_buffer_end - (working_buffer.end() - pos) + offset;
-    }
-    else
-    {
-        throw Exception(ErrorCodes::CANNOT_SEEK_THROUGH_FILE, "Only SEEK_SET and SEEK_CUR seek modes are allowed");
+        /// Still inside the already-fetched buffer.
+        pos = working_buffer.end() - (file_offset_of_buffer_end - new_pos);
+        return offset;
     }
 
-    /// Position is unchanged.
-    if (new_pos + (working_buffer.end() - pos) == file_offset_of_buffer_end)
-        return static_cast<off_t>(new_pos);
-
-    if (!working_buffer.empty()
-        && file_offset_of_buffer_end - working_buffer.size() <= new_pos
-        && new_pos <= file_offset_of_buffer_end)
-    {
-        /// Still inside the already-fetched buffer - no need to re-seek the underlying reader.
-        pos = working_buffer.end() - file_offset_of_buffer_end + new_pos;
-        return static_cast<off_t>(new_pos);
-    }
-
-    auto actual = callOpenDAL(
-        "seek",
-        file_name,
-        description,
-        [&] { return reader.Seek(static_cast<std::streamoff>(new_pos), std::ios_base::beg); });
     resetWorkingBuffer();
-    file_offset_of_buffer_end = static_cast<size_t>(actual);
-    return static_cast<off_t>(actual);
+    file_offset_of_buffer_end = new_pos;
+    return offset;
 }
 
 off_t OpenDALReadBuffer::getPosition()

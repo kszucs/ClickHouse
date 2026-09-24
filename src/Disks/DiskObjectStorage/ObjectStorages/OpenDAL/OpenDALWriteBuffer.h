@@ -7,10 +7,7 @@
 namespace DB
 {
 
-/// Streams data via repeated opendal::Writer::Write() calls, one per flushed buffer, with
-/// a single Close() on finalize - real streaming, not whole-object buffering (unlike
-/// OpenDALReadBuffer's own "no streaming, single blocking call" simplification on the read
-/// side, which the vendored C++ binding didn't support until this was added).
+/// Streams data with one opendal::Writer::Write() per flushed buffer and a single Close() on finalize.
 class OpenDALWriteBuffer : public WriteBufferFromFileBase
 {
 public:
