@@ -1,0 +1,7 @@
+--- no grant
+READ ON OPENDAL
+--- READ ON OPENDAL
+1
+WRITE ON OPENDAL
+--- named collection
+1
