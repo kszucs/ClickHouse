@@ -284,6 +284,10 @@ void FunctionSecretArgumentsFinder::findOrdinaryFunctionSecretArguments()
     {
         findBigQuerySecretArguments();
     }
+    else if (function->name() == "opendal")
+    {
+        findOpenDALSecretArguments();
+    }
     else if ((function->name() == "arrowFlight") || (function->name() == "arrowflight"))
     {
         findArrowFlightSecretArguments();
@@ -1086,6 +1090,33 @@ void FunctionSecretArgumentsFinder::findBigQuerySecretArguments()
             /// before validation rejects it.
             if (start == 1 || !all_keys_readable || slot_index >= 3 || named_slots.contains(positional_slots[slot_index]))
                 markSecretArgument(i);
+        }
+    }
+}
+
+void FunctionSecretArgumentsFinder::findOpenDALSecretArguments()
+{
+    /// opendal('scheme', key = value, ...) or opendal(named_collection, key = value, ...)
+    /// Every argument after the first is an option of the OpenDAL service, and a service may take a
+    /// credential under any name, so only the values of the keys known to be plain are shown.
+    static constexpr std::string_view plain_keys[]
+        = {"path", "format", "structure", "compression_method", "compression", "root", "repo_type", "repo_id", "revision", "download_mode"};
+
+    for (size_t i = 1; i < function->arguments->size(); ++i)
+    {
+        const auto equals_func = function->arguments->at(i)->getFunction();
+        String key;
+        if (equals_func && equals_func->name() == "equals" && equals_func->arguments && equals_func->arguments->size() == 2
+            && tryGetStringFromArgument(*equals_func->arguments->at(0), &key))
+        {
+            if (std::find(std::begin(plain_keys), std::end(plain_keys), key) == std::end(plain_keys))
+                markSecretArgument(i, /* argument_is_named= */ true);
+        }
+        else
+        {
+            /// A positional argument or a key that is not a literal is invalid, but the query is
+            /// logged before validation rejects it.
+            markSecretArgument(i);
         }
     }
 }

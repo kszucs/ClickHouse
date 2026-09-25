@@ -199,6 +199,7 @@ protected:
     void findRedisFunctionSecretArguments();
     void findYTsaurusStorageTableEngineSecretArguments();
     void findBigQuerySecretArguments();
+    void findOpenDALSecretArguments();
     void findNATSTableEngineSecretArguments();
     void findDatabaseEngineSecretArguments();
     void findMySQLDatabaseSecretArguments();

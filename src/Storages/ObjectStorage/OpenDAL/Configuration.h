@@ -17,29 +17,25 @@ struct OpenDALStorageParsedArguments : private StorageParsedArguments
 {
     friend class StorageOpenDALConfiguration;
 
-    static constexpr auto max_number_of_arguments = 5;
     static constexpr auto signatures =
-        " - uri\n"
-        " - uri, format\n"
-        " - uri, format, structure\n"
-        " - scheme, config, path, format\n"
-        " - scheme, config, path, format, structure\n";
+        " - scheme, path = 'path', [format = 'format', structure = 'structure', compression_method = 'method',] [service_option = 'value', ...]\n"
+        " - named_collection, [key = 'value', ...]\n";
 
     String scheme;
-    std::unordered_map<String, String> config;
     String path;
-    /// The URI as written by the user; empty for the explicit form.
-    String raw_uri;
+    /// Options of the OpenDAL service itself, e.g. `repo_id` for "hf".
+    std::unordered_map<String, String> config;
 
     void fromNamedCollection(const NamedCollection & collection, ContextPtr context);
     void fromAST(ASTs & args, ContextPtr context, bool with_structure);
+
+private:
+    /// Consumes `key` if it is one of ClickHouse's own arguments, otherwise stores it as a service option.
+    void setArgument(const String & key, String value);
 };
 
-/// Configuration for the `opendal(scheme, config, path, format)` table function: a thin
-/// SQL-argument-parsing layer over the generic OpenDALObjectStorage. `scheme` selects the
-/// OpenDAL service (e.g. "hf"), `config` is a comma-separated "key=value" list of that
-/// service's own config options (e.g. "repo_type=datasets,repo_id=org/name,revision=main"),
-/// and `path` is the file (or glob) to read within that service/repo.
+/// Configuration for the `opendal` table function: selects an OpenDAL service by its scheme and
+/// passes every argument other than `path`, `format`, `structure` and `compression_method` to it.
 class StorageOpenDALConfiguration : public StorageObjectStorageConfiguration
 {
 public:
@@ -63,6 +59,8 @@ public:
     String getNamespace() const override { return object_namespace; }
     String getDataSourceDescription() const override { return scheme + "://" + object_namespace; }
     StorageObjectStorageQuerySettings getQuerySettings(const ContextPtr &) const override;
+
+    void check(ContextPtr context) override;
 
     ObjectStoragePtr createObjectStorage(ContextPtr context, bool is_readonly, CredentialsConfigurationCallback refresh_credentials_callback) override;
 

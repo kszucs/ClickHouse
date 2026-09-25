@@ -9578,6 +9578,9 @@ Maximum number of WebAssembly UDF instances that can run in parallel per functio
     DECLARE(Bool, allow_experimental_eval_table_function, false, R"(
 Enable experimental table function `eval`.
 )", EXPERIMENTAL) \
+    DECLARE(Bool, allow_experimental_opendal_table_function, false, R"(
+Enable experimental table function `opendal`.
+)", EXPERIMENTAL) \
     \
     /* ####################################################### */ \
     /* ############ END OF EXPERIMENTAL FEATURES ############# */ \

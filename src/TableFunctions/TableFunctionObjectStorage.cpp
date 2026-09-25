@@ -39,12 +39,14 @@ namespace Setting
     extern const SettingsBool parallel_replicas_for_cluster_engines;
     extern const SettingsString cluster_for_parallel_replicas;
     extern const SettingsParallelReplicasMode parallel_replicas_mode;
+    extern const SettingsBool allow_experimental_opendal_table_function;
 }
 
 namespace ErrorCodes
 {
     extern const int BAD_ARGUMENTS;
     extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
+    extern const int SUPPORT_IS_DISABLED;
 }
 
 namespace DataLakeStorageSetting
@@ -302,6 +304,17 @@ StoragePtr TableFunctionObjectStorage<Definition, Configuration, is_data_lake>::
     storage->startup();
     return storage;
 }
+
+#if USE_OPENDAL
+void TableFunctionOpenDAL::parseArguments(const ASTPtr & ast_function, ContextPtr context)
+{
+    if (!context->getSettingsRef()[Setting::allow_experimental_opendal_table_function])
+        throw Exception(
+            ErrorCodes::SUPPORT_IS_DISABLED,
+            "Table function `opendal` is experimental. Set `allow_experimental_opendal_table_function = 1` to enable it");
+    TableFunctionObjectStorage::parseArguments(ast_function, context);
+}
+#endif
 
 void registerTableFunctionObjectStorage(TableFunctionFactory & factory)
 {
@@ -1401,25 +1414,38 @@ SELECT * FROM HDFS('hdfs://hdfs1:9000/data/path/date=*/country=*/code=*/*.parque
 #if USE_OPENDAL
     factory.registerFunction<TableFunctionOpenDAL>(
         {.description = R"DOCS_MD(
-Reads data from any [Apache OpenDAL](https://opendal.apache.org/) service compiled into the server, for example the Hugging Face Hub through the `hf` scheme.
+import { ExperimentalBadge } from "/snippets/components/ExperimentalBadge/ExperimentalBadge.jsx";
+
+<ExperimentalBadge/>
+
+Reads and writes files through [Apache OpenDAL](https://opendal.apache.org/), for example on the Hugging Face Hub, including files stored with Xet.
+The table function is experimental: set `allow_experimental_opendal_table_function = 1` to use it.
 
 ## Syntax {#syntax}
 
 ```sql
-opendal(uri [, format [, structure]])
-opendal(scheme, config, path, format [, structure])
+opendal('scheme', path = 'path' [, format = 'format'] [, structure = 'structure'] [, compression_method = 'method'] [, option = 'value', ...])
+opendal(named_collection [, option = 'value', ...])
 ```
 
 ## Arguments {#arguments}
 
-| Argument    | Description |
-|-------------|-------------|
-| `uri`       | A URI shorthand that encodes the scheme, config and path together. Only `hf://<repo_type>/<org>/<name>[@<revision>]/<path>` is supported. |
-| `scheme`    | The OpenDAL service name, for example `hf`, `fs` or `memory`. |
-| `config`    | The service options as a comma-separated `key=value` list, for example `repo_type=datasets,repo_id=org/name,revision=main`. |
-| `path`      | The path of the file inside the service. Globs are supported. |
-| `format`    | The [format](/reference/formats/index) of the file. |
-| `structure` | Structure of the table. Format `'column1_name column1_type, column2_name column2_type, ...'`. |
+| Argument             | Description |
+|----------------------|-------------|
+| `scheme`             | The OpenDAL service: `hf` (Hugging Face Hub) or `fs` (local files). |
+| `path`               | The path of the file inside the service. Globs are supported. |
+| `format`             | The [format](/reference/formats/index) of the file. Inferred from the file name by default. |
+| `structure`          | Structure of the table. Format `'column1_name column1_type, column2_name column2_type, ...'`. Inferred by default. |
+| `compression_method` | The compression method. Inferred from the file name by default. |
+| `option`             | Any other argument is an option of the service, e.g. `repo_type`, `repo_id`, `revision` and `token` for `hf`, or `root` for `fs`. |
+
+A named collection holds the same keys, with `scheme` among them.
+
+The `hf` service never uses the credentials or the `HF_*` environment variables of the server, and its `endpoint`
+(`https://huggingface.co` by default) must pass [remote_url_allow_hosts](/reference/settings/server-settings/settings/remote#remote_url_allow_hosts).
+On a server, the `root` of the `fs` service must be inside [user_files_path](/reference/settings/server-settings/settings/user#user_files_path).
+
+The table function requires the `READ ON OPENDAL` grant, and `WRITE ON OPENDAL` for inserts.
 
 ## Returned value {#returned-value}
 
@@ -1428,7 +1454,9 @@ A table with the specified structure for reading or writing data in the specifie
 ## Example {#example}
 
 ```sql
-SELECT * FROM opendal('hf://datasets/org/name/path/to/file.parquet', 'Parquet')
+SET allow_experimental_opendal_table_function = 1;
+SELECT count()
+FROM opendal('hf', repo_type = 'datasets', repo_id = 'org/name', path = 'data/*.parquet')
 ```
 
 ## Storage Settings {#storage-settings}

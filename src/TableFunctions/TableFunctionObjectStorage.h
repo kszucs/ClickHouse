@@ -127,6 +127,8 @@ class StorageOpenDALConfiguration;
 class TableFunctionOpenDAL : public TableFunctionObjectStorage<OpenDALDefinition, StorageOpenDALConfiguration>
 {
 protected:
+    void parseArguments(const ASTPtr & ast_function, ContextPtr context) override;
+
     /// Overridden directly because `OpenDAL` is not registered as a storage engine.
     std::optional<AccessTypeObjects::Source> getSourceAccessObject() const override
     {

@@ -3,13 +3,21 @@
 #include <Core/Settings.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/evaluateConstantExpression.h>
+#include <Storages/NamedCollectionsHelpers.h>
 #include <Storages/checkAndGetLiteralArgument.h>
+#include <Common/FieldVisitorToString.h>
 #include <Common/NamedCollections/NamedCollections.h>
+#include <Common/RemoteHostFilter.h>
+#include <Common/filesystemHelpers.h>
 
-#include <boost/algorithm/string/classification.hpp>
-#include <boost/algorithm/string/join.hpp>
-#include <boost/algorithm/string/replace.hpp>
-#include <boost/algorithm/string/split.hpp>
+#include <Poco/URI.h>
+
+#include <filesystem>
+#include <map>
+#include <ranges>
+#include <span>
+
+namespace fs = std::filesystem;
 
 namespace DB
 {
@@ -25,161 +33,88 @@ namespace Setting
 
 namespace ErrorCodes
 {
-    extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
     extern const int BAD_ARGUMENTS;
+    extern const int DATABASE_ACCESS_DENIED;
+    extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
 }
 
 namespace
 {
-    /// Parses "key1=value1,key2=value2" into a config map.
-    std::unordered_map<String, String> parseConfigString(const String & config_str)
-    {
-        std::unordered_map<String, String> result;
-        std::vector<String> pairs;
-        boost::split(pairs, config_str, boost::is_any_of(","), boost::token_compress_on);
-        for (const auto & pair : pairs)
-        {
-            if (pair.empty())
-                continue;
-            auto eq_pos = pair.find('=');
-            if (eq_pos == String::npos)
-                throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH, "Expected 'key=value' pairs in OpenDAL config, got: {}", pair);
-            result.emplace(pair.substr(0, eq_pos), pair.substr(eq_pos + 1));
-        }
-        return result;
-    }
+    /// The services the table function supports, each with the option that names where its data lives,
+    /// which makes the namespace of its paths (like the bucket of S3).
+    const std::map<std::string_view, std::string_view> supported_services{{"fs", "root"}, {"hf", "repo_id"}};
+}
 
-    struct ParsedUri
-    {
-        String scheme;
-        std::unordered_map<String, String> config;
-        String path;
-    };
-
-    /// hf://<repo_type>/<org>/<name>[@<revision>]/<path/to/file>
-    /// Revisions containing '/' (e.g. "refs/convert/parquet") aren't representable in this
-    /// shorthand - use the explicit (scheme, config, path, format) form for those instead.
-    ParsedUri parseHFUri(const String & rest)
-    {
-        std::vector<String> parts;
-        boost::split(parts, rest, boost::is_any_of("/"));
-        if (parts.size() < 4)
-            throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                "Expected hf://<repo_type>/<org>/<name>[@<revision>]/<path>, got: hf://{}", rest);
-
-        const String & repo_type = parts[0];
-        if (repo_type != "datasets" && repo_type != "models" && repo_type != "spaces")
-            throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                "hf:// URI has unknown repo type '{}', expected one of datasets/models/spaces", repo_type);
-
-        const String & org = parts[1];
-        String name = parts[2];
-        String revision = "main";
-        if (auto at_pos = name.find('@'); at_pos != String::npos)
-        {
-            revision = name.substr(at_pos + 1);
-            name.resize(at_pos);
-        }
-
-        String repo_id = org + "/" + name;
-        String path = boost::join(std::vector<String>(parts.begin() + 3, parts.end()), "/");
-        if (path.empty())
-            throw Exception(ErrorCodes::BAD_ARGUMENTS, "hf:// URI is missing a file path: hf://{}", rest);
-
-        return ParsedUri{
-            .scheme = "hf",
-            .config = {{"repo_type", repo_type}, {"repo_id", repo_id}, {"revision", revision}},
-            .path = path};
-    }
-
-    ParsedUri parseUri(const String & uri)
-    {
-        auto scheme_pos = uri.find("://");
-        if (scheme_pos == String::npos)
-            throw Exception(ErrorCodes::BAD_ARGUMENTS, "Expected a '<scheme>://...' URI, got: {}", uri);
-
-        String scheme = uri.substr(0, scheme_pos);
-        String rest = uri.substr(scheme_pos + 3);
-
-        /// Optional "?key=value&key2=value2" suffix, merged into the config map - e.g.
-        /// 'hf://datasets/org/name/path.parquet?download_mode=http'.
-        std::unordered_map<String, String> query_config;
-        if (auto query_pos = rest.find('?'); query_pos != String::npos)
-        {
-            String query_str = rest.substr(query_pos + 1);
-            rest.resize(query_pos);
-            query_config = parseConfigString(boost::replace_all_copy(query_str, "&", ","));
-        }
-
-        ParsedUri result;
-        /// Add further schemes here as more OpenDAL services are wired in (s3, gcs, ...).
-        if (scheme == "hf")
-            result = parseHFUri(rest);
-        else
-            throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                "No URI shorthand for OpenDAL scheme '{}' - use the explicit (scheme, config, path, format) form instead", scheme);
-
-        for (auto & [key, value] : query_config)
-            result.config[key] = value;
-        return result;
-    }
+void OpenDALStorageParsedArguments::setArgument(const String & key, String value)
+{
+    if (key == "path")
+        path = std::move(value);
+    else if (key == "format")
+        format = std::move(value);
+    else if (key == "structure")
+        structure = std::move(value);
+    else if (key == "compression_method" || key == "compression")
+        compression_method = std::move(value);
+    else
+        config[key] = std::move(value);
 }
 
 void OpenDALStorageParsedArguments::fromNamedCollection(const NamedCollection & collection, ContextPtr)
 {
-    scheme = collection.get<String>("scheme");
-    config = parseConfigString(collection.getOrDefault<String>("config", ""));
-    path = collection.get<String>("path");
-    format = collection.getOrDefault<String>("format", "auto");
-    compression_method = collection.getOrDefault<String>("compression_method", collection.getOrDefault<String>("compression", "auto"));
-    structure = collection.getOrDefault<String>("structure", "auto");
+    for (const auto & key : collection.getKeys())
+    {
+        if (key == "scheme")
+            scheme = collection.get<String>(key);
+        else
+            setArgument(key, collection.get<String>(key));
+    }
 }
 
 void OpenDALStorageParsedArguments::fromAST(ASTs & args, ContextPtr context, bool /* with_structure */)
 {
-    if (args.empty() || args.size() > max_number_of_arguments)
-        throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
-            "Table function opendal requires 1 to {} arguments. All supported signatures:\n{}",
-            max_number_of_arguments, signatures);
+    if (args.empty())
+        throw Exception(
+            ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
+            "Table function opendal requires arguments. All supported signatures:\n{}",
+            signatures);
 
-    for (auto & arg : args)
-        arg = evaluateConstantExpressionOrIdentifierAsLiteral(arg, context);
+    args[0] = evaluateConstantExpressionOrIdentifierAsLiteral(args[0], context);
+    scheme = checkAndGetLiteralArgument<String>(args[0], "scheme");
 
-    if (args.size() <= 3)
+    for (const auto & arg : std::span(args).subspan(1))
     {
-        /// Convenient shorthand: a single URI encodes scheme, config and path together,
-        /// e.g. opendal('hf://datasets/org/name/path/to/file.parquet').
-        raw_uri = checkAndGetLiteralArgument<String>(args[0], "uri");
-        auto parsed = parseUri(raw_uri);
-        scheme = std::move(parsed.scheme);
-        config = std::move(parsed.config);
-        path = std::move(parsed.path);
-
-        if (args.size() > 1)
-            format = checkAndGetLiteralArgument<String>(args[1], "format");
-        if (args.size() > 2)
-            structure = checkAndGetLiteralArgument<String>(args[2], "structure");
-    }
-    else
-    {
-        /// Explicit form: full control over the config map for any OpenDAL scheme.
-        scheme = checkAndGetLiteralArgument<String>(args[0], "scheme");
-        config = parseConfigString(checkAndGetLiteralArgument<String>(args[1], "config"));
-        path = checkAndGetLiteralArgument<String>(args[2], "path");
-        format = checkAndGetLiteralArgument<String>(args[3], "format");
-        if (args.size() > 4)
-            structure = checkAndGetLiteralArgument<String>(args[4], "structure");
+        auto [key, value] = getKeyValueFromAST(arg, context);
+        setArgument(key, convertFieldToString(value));
     }
 }
 
 void StorageOpenDALConfiguration::initializeFromParsedArguments(OpenDALStorageParsedArguments && parsed_arguments)
 {
     StorageObjectStorageConfiguration::initializeFromParsedArguments(parsed_arguments);
+
     scheme = std::move(parsed_arguments.scheme);
+    const auto service = supported_services.find(scheme);
+    if (service == supported_services.end())
+        throw Exception(
+            ErrorCodes::BAD_ARGUMENTS,
+            "OpenDAL service '{}' is not supported by table function opendal. Supported services: {}",
+            scheme, fmt::join(std::views::keys(supported_services), ", "));
+    if (parsed_arguments.path.empty())
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Table function opendal requires a `path` argument");
+
     config = std::move(parsed_arguments.config);
-    object_namespace = config.contains("repo_id") ? config.at("repo_id") : "";
+    if (scheme == "hf")
+    {
+        /// The environment of the server must not leak into requests: its Hugging Face token,
+        /// or an endpoint that `remote_url_allow_hosts` would not see.
+        config["disable_config_load"] = "true";
+        config.try_emplace("endpoint", "https://huggingface.co");
+    }
+
+    auto namespace_option = config.find(String(service->second));
+    object_namespace = namespace_option == config.end() ? "" : namespace_option->second;
     path = std::move(parsed_arguments.path);
-    raw_uri = parsed_arguments.raw_uri.empty() ? scheme + "://" + path.path : std::move(parsed_arguments.raw_uri);
+    raw_uri = getDataSourceDescription() + "/" + path.path;
     paths = {path};
 }
 
@@ -197,9 +132,29 @@ void StorageOpenDALConfiguration::fromAST(ASTs & args, ContextPtr context, bool 
     initializeFromParsedArguments(std::move(parsed_arguments));
 }
 
-ObjectStoragePtr StorageOpenDALConfiguration::createObjectStorage(ContextPtr, bool, CredentialsConfigurationCallback)
+void StorageOpenDALConfiguration::check(ContextPtr context)
 {
-    return std::make_shared<OpenDALObjectStorage>(scheme, config, getDataSourceDescription(), object_namespace);
+    if (auto endpoint = config.find("endpoint"); endpoint != config.end())
+        context->getGlobalContext()->getRemoteHostFilter().checkURL(Poco::URI(endpoint->second));
+    StorageObjectStorageConfiguration::check(context);
+}
+
+ObjectStoragePtr StorageOpenDALConfiguration::createObjectStorage(ContextPtr context, bool, CredentialsConfigurationCallback)
+{
+    auto service_config = config;
+    if (scheme == "fs" && context->getApplicationType() != Context::ApplicationType::LOCAL)
+    {
+        /// Like the `file` table function, a server only reads and writes under `user_files_path`.
+        const fs::path user_files_path = context->getUserFilesPath();
+        const auto root = fs::weakly_canonical(user_files_path / service_config["root"]).string();
+        if (!fileOrSymlinkPathStartsWith(root, user_files_path))
+            throw Exception(
+                ErrorCodes::DATABASE_ACCESS_DENIED,
+                "OpenDAL fs root `{}` is not inside `{}`",
+                root, user_files_path.string());
+        service_config["root"] = root;
+    }
+    return std::make_shared<OpenDALObjectStorage>(scheme, service_config, getDataSourceDescription(), object_namespace);
 }
 
 StorageObjectStorageQuerySettings StorageOpenDALConfiguration::getQuerySettings(const ContextPtr & context) const
