@@ -116,6 +116,19 @@ TEST_P(OpenDALObjectStorageTest, WriteReadRoundTrip)
     EXPECT_EQ(read("greeting.txt"), "hello opendal");
 }
 
+TEST_P(OpenDALObjectStorageTest, CancelledWriteLeavesNoObject)
+{
+    /// "fs" writes the file in place, like the `file` table function.
+    if (GetParam().scheme == "fs")
+        GTEST_SKIP() << "fs does not stage writes";
+
+    auto buffer = storage->writeObject(StoredObject("cancelled.txt"), WriteMode::Rewrite);
+    buffer->write("partial", 7);
+    buffer->next();
+    buffer->cancel();
+    EXPECT_FALSE(storage->exists(StoredObject("cancelled.txt")));
+}
+
 TEST_P(OpenDALObjectStorageTest, ExistsReflectsWrites)
 {
     EXPECT_FALSE(storage->exists(StoredObject("absent.txt")));
