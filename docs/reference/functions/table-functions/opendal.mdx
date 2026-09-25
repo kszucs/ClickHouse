@@ -1,0 +1,95 @@
+---
+description: 'The `opendal` table function reads and writes files through Apache OpenDAL, for example on the Hugging Face Hub.'
+sidebarTitle: 'opendal'
+slug: /sql-reference/table-functions/opendal
+title: 'opendal'
+doc_type: 'reference'
+---
+
+The `opendal` table function reads and writes files through [Apache OpenDAL](https://opendal.apache.org/), for example on the Hugging Face Hub, including files stored with Xet.
+
+This table function is experimental and disabled by default. Enable it with the `allow_experimental_opendal_table_function` setting:
+
+```sql
+SET allow_experimental_opendal_table_function = 1;
+```
+
+It is only available in builds configured with `-DENABLE_OPENDAL=1`, which report `USE_OPENDAL` in `system.build_options`.
+
+## Syntax {#syntax}
+
+```sql
+opendal('scheme', path = 'path' [, format = 'format'] [, structure = 'structure'] [, compression_method = 'method'] [, option = 'value', ...])
+opendal(named_collection [, option = 'value', ...])
+```
+
+## Arguments {#arguments}
+
+| Argument             | Description |
+|----------------------|-------------|
+| `scheme`             | The OpenDAL service: `hf` (Hugging Face Hub) or `fs` (local files). |
+| `path`               | The path of the file inside the service. Globs are supported. |
+| `format`             | The [format](/reference/formats/index) of the file. Inferred from the file name by default. |
+| `structure`          | Structure of the table. Format `'column1_name column1_type, column2_name column2_type, ...'`. Inferred by default. |
+| `compression_method` | The compression method. Inferred from the file name by default. |
+| `option`             | Any other argument is an option of the service, see [Services](#services). |
+
+A named collection holds the same keys, with `scheme` among them.
+
+## Services {#services}
+
+### hf {#hf}
+
+Reads from and writes to a repository on the [Hugging Face Hub](https://huggingface.co).
+
+| Option          | Description |
+|-----------------|-------------|
+| `repo_type`     | `datasets`, `models` or `spaces`. |
+| `repo_id`       | The repository, e.g. `org/name`. |
+| `revision`      | The branch, tag or commit. `main` by default. |
+| `token`         | A Hugging Face access token, required for private repositories and for writing. |
+| `endpoint`      | The Hub endpoint. `https://huggingface.co` by default. |
+| `download_mode` | `xet` (default) or `http`. |
+
+The service never uses the credentials or the `HF_*` environment variables of the server, and its `endpoint` must pass [remote_url_allow_hosts](/reference/settings/server-settings/settings/remote#remote_url_allow_hosts).
+
+### fs {#fs}
+
+Reads from and writes to local files under `root`. On a server, `root` is relative to [user_files_path](/reference/settings/server-settings/settings/user#user_files_path) and must stay inside it, like the paths of the [file](/reference/functions/table-functions/file) table function.
+
+## Returned value {#returned-value}
+
+A table with the specified structure for reading or writing data in the specified file.
+
+## Access {#access}
+
+The table function requires the `READ ON OPENDAL` grant, and `WRITE ON OPENDAL` for inserts. The values of all options other than `path`, `format`, `structure`, `compression_method`, `root`, `repo_type`, `repo_id`, `revision` and `download_mode` are hidden in logs.
+
+## Examples {#examples}
+
+Count the rows of a dataset on the Hugging Face Hub:
+
+```sql
+SELECT count()
+FROM opendal('hf', repo_type = 'datasets', repo_id = 'org/name', path = 'data/*.parquet')
+```
+
+Write and read back a file under `user_files_path`:
+
+```sql
+INSERT INTO FUNCTION opendal('fs', root = 'exports', path = 'numbers.csv', structure = 'n UInt64')
+SELECT number FROM numbers(3);
+
+SELECT * FROM opendal('fs', root = 'exports', path = 'numbers.csv', structure = 'n UInt64');
+```
+
+## Storage settings {#storage-settings}
+
+- `opendal_truncate_on_insert` - allows to truncate file before insert into it. Disabled by default.
+- `opendal_create_new_file_on_insert` - allows to create a new file on each insert if format has suffix. Disabled by default.
+- `opendal_skip_empty_files` - allows to skip empty files while reading. Disabled by default.
+- `schema_inference_use_cache_for_opendal` - use the schema inference cache. Enabled by default.
+
+## Related {#related}
+
+- [Virtual columns](/reference/engines/table-engines/index#table_engines-virtual_columns)

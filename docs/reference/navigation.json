@@ -730,6 +730,7 @@
             "reference/functions/table-functions/null",
             "reference/functions/table-functions/numbers",
             "reference/functions/table-functions/odbc",
+            "reference/functions/table-functions/opendal",
             "reference/functions/table-functions/paimon",
             "reference/functions/table-functions/paimonCluster",
             "reference/functions/table-functions/postgresql",
