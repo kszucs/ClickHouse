@@ -465,3 +465,6 @@
 [submodule "contrib/spdlog"]
 	path = contrib/spdlog
 	url = https://github.com/gabime/spdlog.git
+[submodule "contrib/opendal"]
+	path = contrib/opendal
+	url = https://github.com/kszucs/opendal
